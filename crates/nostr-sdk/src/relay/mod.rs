@@ -12,7 +12,7 @@ use std::time::Duration;
 use futures_util::{Future, SinkExt, StreamExt};
 #[cfg(feature = "nip11")]
 use nostr::nips::nip11::RelayInformationDocument;
-use nostr::{ClientMessage, Event, Filter, RelayMessage, SubscriptionId, Url};
+use nostr::{ClientMessage, Event, Filter, RelayMessage, SubscriptionId, Url, ChannelId};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
@@ -24,6 +24,7 @@ pub mod pool;
 use self::net::Message as WsMessage;
 use self::pool::RelayPoolMessage;
 use self::pool::SUBSCRIPTION;
+use crate::subscription::Subscription;
 use crate::thread;
 use crate::RelayPoolNotification;
 #[cfg(feature = "blocking")]
@@ -162,6 +163,7 @@ pub struct Relay {
     relay_sender: Sender<Message>,
     relay_receiver: Arc<Mutex<Receiver<Message>>>,
     notification_sender: broadcast::Sender<RelayPoolNotification>,
+    subscription_id: Arc<Mutex<SubscriptionId>>
 }
 
 impl Relay {
@@ -187,6 +189,7 @@ impl Relay {
             relay_sender,
             relay_receiver: Arc::new(Mutex::new(relay_receiver)),
             notification_sender,
+            subscription_id: Arc::new(Mutex::new(SubscriptionId::generate()))
         }
     }
 
@@ -420,19 +423,7 @@ impl Relay {
                     }
                 });
 
-                // Subscribe to relay
-                if self.opts.read() {
-                    if let Err(e) = self.subscribe(false).await {
-                        match e {
-                            Error::FiltersEmpty => (),
-                            _ => log::error!(
-                                "Impossible to subscribe to {}: {}",
-                                self.url(),
-                                e.to_string()
-                            ),
-                        }
-                    }
-                }
+               
             }
             Err(err) => {
                 self.set_status(RelayStatus::Disconnected).await;
@@ -511,25 +502,24 @@ impl Relay {
     }
 
     /// Subscribe
-    pub async fn subscribe(&self, wait: bool) -> Result<SubscriptionId, Error> {
+    pub async fn subscribe(&self, subscription: Subscription, wait: bool) -> Result<SubscriptionId, Error> {
         if !self.opts.read() {
             return Err(Error::ReadDisabled);
         }
 
-        let mut subscription = SUBSCRIPTION.lock().await;
         let filters = subscription.get_filters();
 
         if filters.is_empty() {
             return Err(Error::FiltersEmpty);
         }
 
-        let channel = subscription.get_channel(&self.url());
-        let channel_id = channel.id();
+       let subscription_id = SubscriptionId::generate();
 
-        self.send_msg(ClientMessage::new_req(channel_id.clone(), filters), wait)
+        self.send_msg(ClientMessage::new_req(subscription_id.clone(), filters), wait)
             .await?;
+        *self.subscription_id.lock().await = subscription_id.clone();
 
-        Ok(channel_id)
+        Ok(subscription_id)
     }
 
     /// Unsubscribe
@@ -538,9 +528,9 @@ impl Relay {
             return Err(Error::ReadDisabled);
         }
 
-        let mut subscription = SUBSCRIPTION.lock().await;
-        if let Some(channel) = subscription.remove_channel(&self.url()) {
-            self.send_msg(ClientMessage::close(channel.id()), wait)
+
+        if let Some(subscription_id) = self.subscription_id.lock().await.into() {
+            self.send_msg(ClientMessage::close(subscription_id.clone()), wait)
                 .await?;
         }
         Ok(())

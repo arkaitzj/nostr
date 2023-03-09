@@ -923,3 +923,31 @@ impl Client {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+
+    #[tokio::test]
+    async fn dual_client() {
+        
+        let client1 = Client::new(&Keys::generate());
+        let client2 = Client::new(&Keys::generate());
+
+        client1.add_relay("ws://server_one", None).await;
+        client2.add_relay("ws://server_two", None).await;
+
+
+        let client1_interests = vec![Keys::generate().public_key()];
+        let client2_interests = vec![Keys::generate().public_key()];
+
+        client1.subscribe(vec![Filter::new().pubkeys(client1_interests)]).await;
+        client2.subscribe(vec![Filter::new().pubkeys(client2_interests)]).await;
+
+        assert_ne!(client1.pool.subscription().await.get_filters(), client2.pool.subscription().await.get_filters());
+
+    }
+
+}

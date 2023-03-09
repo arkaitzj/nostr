@@ -184,6 +184,7 @@ pub struct RelayPool {
     relays: Arc<Mutex<HashMap<Url, Relay>>>,
     pool_task_sender: Sender<RelayPoolMessage>,
     notification_sender: broadcast::Sender<RelayPoolNotification>,
+    subscriptions: Arc<Mutex<Subscription>>,
     #[cfg(feature = "sqlite")]
     store: Option<Store>,
 }
@@ -209,6 +210,7 @@ impl RelayPool {
             relays: Arc::new(Mutex::new(HashMap::new())),
             pool_task_sender,
             notification_sender,
+            subscriptions: Arc::new(Mutex::new(Subscription::new())),
             #[cfg(feature = "sqlite")]
             store: None,
         }
@@ -237,6 +239,7 @@ impl RelayPool {
             relays: Arc::new(Mutex::new(HashMap::new())),
             pool_task_sender,
             notification_sender,
+            subscriptions: Arc::new(Mutex::new(Subscription::new())),
             #[cfg(feature = "sqlite")]
             store,
         })
@@ -261,8 +264,7 @@ impl RelayPool {
 
     /// Get subscriptions
     pub async fn subscription(&self) -> Subscription {
-        let subscription = SUBSCRIPTION.lock().await;
-        subscription.clone()
+        self.subscriptions.lock().await.clone()
     }
 
     /// Add new relay
@@ -360,15 +362,11 @@ impl RelayPool {
 
     /// Subscribe to filters
     pub async fn subscribe(&self, filters: Vec<Filter>, wait: bool) {
-        let relays = self.relays().await;
+        let mut relays = self.relays().await;
+        self.subscriptions.lock().await.update_filters(filters);
 
-        {
-            let mut subscription = SUBSCRIPTION.lock().await;
-            subscription.update_filters(filters.clone());
-        }
-
-        for relay in relays.values() {
-            if let Err(e) = relay.subscribe(wait).await {
+        for (_,relay) in relays.iter_mut() {
+            if let Err(e) = relay.subscribe(self.subscriptions.lock().await.clone(), wait).await {
                 log::error!("{e}");
             }
         }
@@ -376,8 +374,8 @@ impl RelayPool {
 
     /// Unsubscribe from filters
     pub async fn unsubscribe(&self, wait: bool) {
-        let relays = self.relays().await;
-        for relay in relays.values() {
+        let mut relays = self.relays().await;
+        for (_,relay) in relays.iter_mut() {
             if let Err(e) = relay.unsubscribe(wait).await {
                 log::error!("{e}");
             }
@@ -445,6 +443,7 @@ impl RelayPool {
     /// Connect to relay
     pub async fn connect_relay(&self, relay: &Relay, wait_for_connection: bool) {
         relay.connect(wait_for_connection).await;
+        relay.subscribe(self.subscriptions.lock().await.clone(), false).await;
         #[cfg(feature = "sqlite")]
         if let Some(store) = &self.store {
             if let Err(e) = store.enable_relay(relay.url()) {
