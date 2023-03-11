@@ -4,11 +4,11 @@ version = "0.19.1"
 edition = "2021"
 description = "High level Nostr client library."
 authors = ["Yuki Kishimoto <yukikishimoto@proton.me>"]
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
+#homepage.workspace = true
+#repository.workspace = true
+#license.workspace = true
 readme = "README.md"
-rust-version.workspace = true
+#rust-version.workspace = true
 keywords = ["nostr", "sdk", "rust"]
 
 [features]
